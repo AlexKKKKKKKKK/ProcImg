@@ -4,6 +4,102 @@
 #include <stdlib.h>
 #include <math.h>
 
+// Estrutura para armazenar os dados de análise da imagem
+typedef struct {
+    int histogram[256];
+    double mean;
+    double stddev;
+    int total_pixels;
+} ImageStats;
+
+// Converte a imagem para escala de cinza e a padroniza para um formato de 32 bits
+SDL_Surface* convert_to_grayscale(SDL_Surface* original) {
+    SDL_Surface* gray_surface = SDL_ConvertSurfaceFormat(original, SDL_PIXELFORMAT_ARGB8888);
+    if (!gray_surface) return NULL;
+
+    Uint32* pixels = (Uint32*)gray_surface->pixels;
+    int pixel_count = gray_surface->w * gray_surface->h;
+
+    int is_colored = 0; // Flag para verificar se já era cinza
+
+    for (int i = 0; i < pixel_count; ++i) {
+        Uint8 r, g, b, a;
+        SDL_GetRGBA(pixels[i], gray_surface->format, &r, &g, &b, &a);
+
+        if (r != g || r != b) {
+            is_colored = 1;
+        }
+
+        // Aplica a fórmula exigida no enunciado
+        Uint8 y = (Uint8)(0.2125 * r + 0.7154 * g + 0.0721 * b);
+        pixels[i] = SDL_MapRGBA(gray_surface->format, y, y, y, a);
+    }
+
+    if (is_colored) printf("Imagem colorida detectada. Convertida para escala de cinza.\n");
+    else printf("A imagem já estava em escala de cinza.\n");
+
+    return gray_surface;
+}
+
+// Calcula o histograma, média e desvio padrão
+void calculate_stats(SDL_Surface* img, ImageStats* stats) {
+    for (int i = 0; i < 256; i++) stats->histogram[i] = 0;
+    stats->total_pixels = img->w * img->h;
+
+    Uint32* pixels = (Uint32*)img->pixels;
+    double sum = 0;
+
+    for (int i = 0; i < stats->total_pixels; i++) {
+        Uint8 r, g, b, a;
+        SDL_GetRGBA(pixels[i], img->format, &r, &g, &b, &a);
+        stats->histogram[r]++;
+        sum += r;
+    }
+
+    stats->mean = sum / stats->total_pixels;
+
+    double variance_sum = 0;
+    for (int i = 0; i < 256; i++) {
+        variance_sum += stats->histogram[i] * pow(i - stats->mean, 2);
+    }
+    stats->stddev = sqrt(variance_sum / stats->total_pixels);
+
+    // Classificação
+    printf("\n--- Analise do Histograma ---\n");
+    printf("Media: %.2f -> Imagem %s\n", stats->mean,
+           (stats->mean < 85) ? "Escura" : (stats->mean > 170) ? "Clara" : "Media");
+    printf("Desvio Padrao: %.2f -> Contraste %s\n", stats->stddev,
+           (stats->stddev < 40) ? "Baixo" : (stats->stddev > 80) ? "Alto" : "Medio");
+}
+
+// Equaliza o histograma retornando uma nova surface
+SDL_Surface* equalize_histogram(SDL_Surface* original, ImageStats* stats) {
+    SDL_Surface* eq_surface = SDL_ConvertSurfaceFormat(original, SDL_PIXELFORMAT_ARGB8888);
+    int cdf[256] = {0};
+
+    cdf[0] = stats->histogram[0];
+    for (int i = 1; i < 256; i++) {
+        cdf[i] = cdf[i-1] + stats->histogram[i];
+    }
+
+    int cdf_min = 0;
+    for (int i = 0; i < 256; i++) {
+        if (cdf[i] > 0) { cdf_min = cdf[i]; break; }
+    }
+
+    Uint32* pixels = (Uint32*)eq_surface->pixels;
+    for (int i = 0; i < stats->total_pixels; i++) {
+        Uint8 r, g, b, a;
+        SDL_GetRGBA(pixels[i], eq_surface->format, &r, &g, &b, &a);
+
+        float h_v = (float)(cdf[r] - cdf_min) / (stats->total_pixels - cdf_min);
+        Uint8 new_val = (Uint8)round(h_v * 255.0f);
+
+        pixels[i] = SDL_MapRGBA(eq_surface->format, new_val, new_val, new_val, a);
+    }
+    return eq_surface;
+}
+
 int main(int argc, char* argv[]) {
     // 1. Tratamento da linha de comando
     if (argc != 2) {
