@@ -4,7 +4,7 @@ Projeto de processamento de imagem em C usando a biblioteca SDL3 para análise e
 
 # Compilação
 
-Rodamos o código no WSL2, instalando as bibliotecas SDL, SDL_image e SDL_ttf localmente via git clone, cmake -S . -B build e cmake --build build para compilar usamos:
+Rodamos o código no WSL2, instalando ass  bibliotecaSDL, SDL_image e SDL_ttf localmente via git clone, cmake -S . -B build e cmake --build build para compilar usamos:
 
 gcc main3.c -o programa -lSDL3 -lSDL3_image -lSDL3_ttf -lm
 
@@ -13,3 +13,8 @@ gcc main3.c -o programa -lSDL3 -lSDL3_image -lSDL3_ttf -lm
 Para consertar usamos:
 
 export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+
+# Alunos
+Thomas Pinheiro Grandin, RA: 10418118
+
+Alex Kazuo Kodama, RA: 10417942
