@@ -1,260 +1,296 @@
-#include <SDL3/SDL.h>
-#include <SDL3_image/SDL_image.h>
+//Alex Kodama 10417942
+//Thomas Pinheiro 10418118
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
-// Estrutura para armazenar os dados de análise da imagem
+// ESTRUTURAS
 typedef struct {
-    int histogram[256];
-    double mean;
-    double stddev;
+    int bins[256];
+    double media;
+    double desvio_padrao;
     int total_pixels;
-} ImageStats;
+} Histograma;
 
-// Converte a imagem para escala de cinza e a padroniza para um formato de 32 bits
-SDL_Surface* convert_to_grayscale(SDL_Surface* original) {
-    SDL_Surface* gray_surface = SDL_ConvertSurfaceFormat(original, SDL_PIXELFORMAT_ARGB8888);
-    if (!gray_surface) return NULL;
+// FUNÇÕES AUXILIARES DE CLASSIFICAÇÃO
+const char* classificarLuminosidade(double media) {
+    if (media < 85) return "Escura";
+    if (media > 170) return "Clara";
+    return "Media";
+}
 
-    Uint32* pixels = (Uint32*)gray_surface->pixels;
-    int pixel_count = gray_surface->w * gray_surface->h;
+const char* classificarContraste(double desvio) {
+    if (desvio < 40) return "Baixo";
+    if (desvio > 80) return "Alto";
+    return "Medio";
+}
 
-    int is_colored = 0; // Flag para verificar se já era cinza
+// PROCESSAMENTO DE IMAGEM
+void converterParaCinza(SDL_Surface* surface) {
+    SDL_LockSurface(surface);
+    const SDL_PixelFormatDetails *formatDetails = SDL_GetPixelFormatDetails(surface->format);
+    SDL_Palette *palette = SDL_GetSurfacePalette(surface);
 
-    for (int i = 0; i < pixel_count; ++i) {
-        Uint8 r, g, b, a;
-        SDL_GetRGBA(pixels[i], gray_surface->format, &r, &g, &b, &a);
+    for (int y = 0; y < surface->h; ++y) {
+        for (int x = 0; x < surface->w; ++x) {
+            Uint32* pixel = (Uint32*)((Uint8*)surface->pixels + y * surface->pitch + x * formatDetails->bytes_per_pixel);
+            Uint8 r, g, b, a;
+            SDL_GetRGBA(*pixel, formatDetails, palette, &r, &g, &b, &a);
 
-        if (r != g || r != b) {
-            is_colored = 1;
+            if (!(r == g && g == b)) {
+                Uint8 y_gray = (Uint8)(0.2125 * r + 0.7154 * g + 0.0721 * b);
+                *pixel = SDL_MapRGBA(formatDetails, palette, y_gray, y_gray, y_gray, a);
+            }
+        }
+    }
+    SDL_UnlockSurface(surface);
+}
+
+Histograma calcularHistograma(SDL_Surface* surface) {
+    Histograma hist = {0};
+    hist.total_pixels = surface->w * surface->h;
+
+    SDL_LockSurface(surface);
+    Uint8* pixels = (Uint8*)surface->pixels;
+    const SDL_PixelFormatDetails *formatDetails = SDL_GetPixelFormatDetails(surface->format);
+    SDL_Palette *palette = SDL_GetSurfacePalette(surface);
+
+    for (int i = 0; i < hist.total_pixels; i++) {
+        Uint32 pixel;
+        if(formatDetails->bytes_per_pixel == 4) {
+             pixel = ((Uint32*)pixels)[i];
+        } else if (formatDetails->bytes_per_pixel == 3) {
+             pixel = pixels[i * 3] | (pixels[i * 3 + 1] << 8) | (pixels[i * 3 + 2] << 16);
+        } else {
+             pixel = ((Uint8*)pixels)[i];
         }
 
-        // Aplica a fórmula exigida no enunciado
-        Uint8 y = (Uint8)(0.2125 * r + 0.7154 * g + 0.0721 * b);
-        pixels[i] = SDL_MapRGBA(gray_surface->format, y, y, y, a);
+        Uint8 y_gray, g, b, a;
+        SDL_GetRGBA(pixel, formatDetails, palette, &y_gray, &g, &b, &a);
+        hist.bins[y_gray]++;
     }
+    SDL_UnlockSurface(surface);
 
-    if (is_colored) printf("Imagem colorida detectada. Convertida para escala de cinza.\n");
-    else printf("A imagem já estava em escala de cinza.\n");
-
-    return gray_surface;
-}
-
-// Calcula o histograma, média e desvio padrão
-void calculate_stats(SDL_Surface* img, ImageStats* stats) {
-    for (int i = 0; i < 256; i++) stats->histogram[i] = 0;
-    stats->total_pixels = img->w * img->h;
-
-    Uint32* pixels = (Uint32*)img->pixels;
-    double sum = 0;
-
-    for (int i = 0; i < stats->total_pixels; i++) {
-        Uint8 r, g, b, a;
-        SDL_GetRGBA(pixels[i], img->format, &r, &g, &b, &a);
-        stats->histogram[r]++;
-        sum += r;
-    }
-
-    stats->mean = sum / stats->total_pixels;
-
-    double variance_sum = 0;
+    double soma = 0;
     for (int i = 0; i < 256; i++) {
-        variance_sum += stats->histogram[i] * pow(i - stats->mean, 2);
+        soma += i * hist.bins[i];
     }
-    stats->stddev = sqrt(variance_sum / stats->total_pixels);
+    hist.media = soma / hist.total_pixels;
 
-    // Classificação
-    printf("\n--- Analise do Histograma ---\n");
-    printf("Media: %.2f -> Imagem %s\n", stats->mean,
-           (stats->mean < 85) ? "Escura" : (stats->mean > 170) ? "Clara" : "Media");
-    printf("Desvio Padrao: %.2f -> Contraste %s\n", stats->stddev,
-           (stats->stddev < 40) ? "Baixo" : (stats->stddev > 80) ? "Alto" : "Medio");
+    double soma_variancia = 0;
+    for (int i = 0; i < 256; i++) {
+        soma_variancia += hist.bins[i] * pow(i - hist.media, 2);
+    }
+    hist.desvio_padrao = sqrt(soma_variancia / hist.total_pixels);
+
+    return hist;
 }
 
-// Equaliza o histograma retornando uma nova surface
-SDL_Surface* equalize_histogram(SDL_Surface* original, ImageStats* stats) {
-    SDL_Surface* eq_surface = SDL_ConvertSurfaceFormat(original, SDL_PIXELFORMAT_ARGB8888);
+void equalizarImagem(SDL_Surface* original, SDL_Surface* destino, Histograma* histOriginal) {
     int cdf[256] = {0};
+    int min_cdf = 0;
 
-    cdf[0] = stats->histogram[0];
+    cdf[0] = histOriginal->bins[0];
     for (int i = 1; i < 256; i++) {
-        cdf[i] = cdf[i-1] + stats->histogram[i];
+        cdf[i] = cdf[i-1] + histOriginal->bins[i];
     }
-
-    int cdf_min = 0;
     for (int i = 0; i < 256; i++) {
-        if (cdf[i] > 0) { cdf_min = cdf[i]; break; }
+        if (cdf[i] > 0) {
+            min_cdf = cdf[i];
+            break;
+        }
     }
 
-    Uint32* pixels = (Uint32*)eq_surface->pixels;
-    for (int i = 0; i < stats->total_pixels; i++) {
-        Uint8 r, g, b, a;
-        SDL_GetRGBA(pixels[i], eq_surface->format, &r, &g, &b, &a);
-
-        float h_v = (float)(cdf[r] - cdf_min) / (stats->total_pixels - cdf_min);
-        Uint8 new_val = (Uint8)round(h_v * 255.0f);
-
-        pixels[i] = SDL_MapRGBA(eq_surface->format, new_val, new_val, new_val, a);
+    Uint8 mapa[256];
+    for (int i = 0; i < 256; i++) {
+        mapa[i] = (Uint8)round(((double)(cdf[i] - min_cdf) / (histOriginal->total_pixels - min_cdf)) * 255.0);
     }
-    return eq_surface;
+
+    SDL_LockSurface(original);
+    SDL_LockSurface(destino);
+    const SDL_PixelFormatDetails *formatDetails = SDL_GetPixelFormatDetails(original->format);
+    SDL_Palette *palette = SDL_GetSurfacePalette(original);
+
+    Uint32* pixOrig = (Uint32*)original->pixels;
+    Uint32* pixDest = (Uint32*)destino->pixels;
+
+    for (int i = 0; i < histOriginal->total_pixels; i++) {
+        Uint8 y, g, b, a;
+        SDL_GetRGBA(pixOrig[i], formatDetails, palette, &y, &g, &b, &a);
+        Uint8 novo_y = mapa[y];
+        pixDest[i] = SDL_MapRGBA(formatDetails, palette, novo_y, novo_y, novo_y, a);
+    }
+    SDL_UnlockSurface(destino);
+    SDL_UnlockSurface(original);
 }
 
+// FUNÇÃO PRINCIPAL
 int main(int argc, char* argv[]) {
-    // 1. Tratamento da linha de comando
-    if (argc != 2) {
+    // 1. Argumentos da linha de comando
+    if (argc < 2) {
         printf("Uso: %s <caminho_da_imagem.ext>\n", argv[0]);
         return 1;
     }
+    const char* imagePath = argv[1];
 
-    // Inicialização da SDL
+    // 2. Inicialização das bibliotecas
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        printf("Erro ao inicializar SDL: %s\n", SDL_GetError());
-        return 1;
+        printf("Erro SDL: %s\n", SDL_GetError()); return 1;
+    }
+    if (TTF_Init() < 0) {
+        printf("Erro TTF: %s\n", SDL_GetError());
     }
 
-    // 2. Carregamento da imagem
-    SDL_Surface* raw_image = IMG_Load(argv[1]);
-    if (!raw_image) {
-        printf("Erro ao carregar a imagem %s. Formato invalido ou arquivo nao encontrado. (%s)\n", argv[1], IMG_GetError());
-        SDL_Quit();
-        return 1;
+    // 3. Carregar e preparar a imagem
+    SDL_Surface* imgSurface = IMG_Load(imagePath);
+    if (!imgSurface) {
+        printf("Erro ao carregar a imagem '%s'.\n", imagePath);
+        SDL_Quit(); return 1;
     }
 
-    // Processamento Inicial
-    SDL_Surface* gray_image = convert_to_grayscale(raw_image);
-    SDL_DestroySurface(raw_image);
+    // Garantir formato 32-bits para simplificar manipulação
+    SDL_Surface* surfaceFormatada = SDL_ConvertSurface(imgSurface, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(imgSurface);
 
-    ImageStats stats_gray, stats_eq;
-    calculate_stats(gray_image, &stats_gray);
-    SDL_Surface* eq_image = equalize_histogram(gray_image, &stats_gray);
-    calculate_stats(eq_image, &stats_eq);
+    // Converte para cinza
+    converterParaCinza(surfaceFormatada);
 
-    // Variáveis de estado
-    SDL_Surface* current_surface = gray_image;
-    ImageStats* current_stats = &stats_gray;
-    int is_equalized = 0;
+    // Cria um backup da imagem em cinza para a reversão
+    SDL_Surface* surfaceBackupCinza = SDL_DuplicateSurface(surfaceFormatada);
 
-    // 3. Setup das Janelas e Renderizadores
-    SDL_Window* main_window = SDL_CreateWindow("Proj1 - Imagem", current_surface->w, current_surface->h, SDL_WINDOW_HIGH_PIXEL_DENSITY);
-    SDL_Renderer* main_renderer = SDL_CreateRenderer(main_window, NULL);
-
-    // Centraliza a principal e pega a posição para colocar a secundária ao lado
-    SDL_SetWindowPosition(main_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    // 4. Criação das Janelas
+    SDL_Window* mainWindow = SDL_CreateWindow("Proj1 - Imagem Principal", surfaceFormatada->w, surfaceFormatada->h, 0);
+    SDL_Renderer* mainRenderer = SDL_CreateRenderer(mainWindow, NULL);
+    SDL_SetWindowPosition(mainWindow, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     int main_x, main_y;
-    SDL_GetWindowPosition(main_window, &main_x, &main_y);
+    SDL_GetWindowPosition(mainWindow, &main_x, &main_y);
+    SDL_Texture* imageTexture = SDL_CreateTextureFromSurface(mainRenderer, surfaceFormatada);
 
-    int sec_w = 400, sec_h = 600;
-    SDL_Window* sec_window = SDL_CreateWindow("Proj1 - Controles e Histograma", sec_w, sec_h, 0);
-    SDL_Renderer* sec_renderer = SDL_CreateRenderer(sec_window, NULL);
-    SDL_SetWindowPosition(sec_window, main_x + current_surface->w + 10, main_y);
+    SDL_Window* secWindow = SDL_CreateWindow("Proj1 - Ferramentas", 400, 600, 0);
+    SDL_Renderer* secRenderer = SDL_CreateRenderer(secWindow, NULL);
+    SDL_SetWindowPosition(secWindow, main_x + surfaceFormatada->w + 10, main_y);
 
-    // Retângulos e texturas
-    SDL_FRect btn_rect = {50, sec_h - 100, (float)sec_w - 100, 60};
-    SDL_Texture* tex_gray = SDL_CreateTextureFromSurface(main_renderer, gray_image);
-    SDL_Texture* tex_eq = SDL_CreateTextureFromSurface(main_renderer, eq_image);
-    SDL_Texture* current_texture = tex_gray;
+    // 5. Configuração da Interface Secundária
+    Histograma histAtual = calcularHistograma(surfaceFormatada);
+    TTF_Font* font = TTF_OpenFont("fonte.ttf", 16); // COLOQUE UMA FONTE .TTF NA PASTA!
+    if (!font) {
+        printf("Aviso: Fonte 'fonte.ttf' nao encontrada. Estatisticas apenas no console.\n");
+        printf("Luminosidade: %s | Contraste: %s\n", classificarLuminosidade(histAtual.media), classificarContraste(histAtual.desvio_padrao));
+    }
 
+    SDL_FRect btnRect = {50, 450, 300, 50};
+    int btnHover = 0;
+    int isEqualized = 0;
     int running = 1;
     SDL_Event event;
-    int btn_state = 0; // 0: Neutro, 1: Hover, 2: Clicked
 
+    // 6. Loop Principal
     while (running) {
-        // --- EVENTOS ---
         while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT) {
+            if (event.type == SDL_EVENT_QUIT || event.key.key == SDLK_ESCAPE) {
                 running = 0;
             }
-            // 6. Salvar Imagem com 'S'
-            else if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_S) {
-                if (IMG_SavePNG(current_surface, "output_image.png") == 0) {
-                    printf("Imagem salva como 'output_image.png' com sucesso!\n");
-                } else {
-                    printf("Erro ao salvar imagem: %s\n", IMG_GetError());
+
+            // Tratamento de Teclado (Salvar Imagem)
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_S) {
+                if (IMG_SavePNG(surfaceFormatada, "output_image.png") == 0) {
+                    printf("Imagem salva em 'output_image.png'!\n");
                 }
             }
-            // Interação do Mouse no botão (Janela Secundária)
-            else if (event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
-                float mx = event.motion.x;
-                float my = event.motion.y;
-                SDL_Window* focus = SDL_GetMouseFocus();
 
-                if (focus == sec_window) {
-                    int inside = (mx >= btn_rect.x && mx <= (btn_rect.x + btn_rect.w) &&
-                                  my >= btn_rect.y && my <= (btn_rect.y + btn_rect.h));
-                    if (!inside) {
-                        btn_state = 0;
+            // Capturar mouse na janela secundária
+            if (event.window.windowID == SDL_GetWindowID(secWindow)) {
+                if (event.type == SDL_EVENT_MOUSE_MOTION) {
+                    float mx = event.motion.x; float my = event.motion.y;
+                    btnHover = (mx >= btnRect.x && mx <= btnRect.x + btnRect.w && my >= btnRect.y && my <= btnRect.y + btnRect.h);
+                }
+
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && btnHover) {
+                    if (!isEqualized) {
+                        equalizarImagem(surfaceBackupCinza, surfaceFormatada, &histAtual);
+                        isEqualized = 1;
                     } else {
-                        if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
-                            btn_state = 2; // Clicado
-                        } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) {
-                            if (btn_state == 2) { // Soltou o clique dentro
-                                // 5. Alternar Equalização
-                                is_equalized = !is_equalized;
-                                current_surface = is_equalized ? eq_image : gray_image;
-                                current_texture = is_equalized ? tex_eq : tex_gray;
-                                current_stats = is_equalized ? &stats_eq : &stats_gray;
-                                printf("Modo: %s\n", is_equalized ? "Equalizado" : "Original (Cinza)");
-                            }
-                            btn_state = 1; // Volta pra hover
-                        } else if (btn_state != 2) {
-                            btn_state = 1; // Hover
-                        }
+                        SDL_BlitSurface(surfaceBackupCinza, NULL, surfaceFormatada, NULL);
+                        isEqualized = 0;
                     }
-                } else {
-                    btn_state = 0;
+
+                    // Atualiza Textura e Histograma
+                    SDL_DestroyTexture(imageTexture);
+                    imageTexture = SDL_CreateTextureFromSurface(mainRenderer, surfaceFormatada);
+                    histAtual = calcularHistograma(surfaceFormatada);
+
+                    if(!font) {
+                         printf("Atualizado - Luminosidade: %s | Contraste: %s\n", classificarLuminosidade(histAtual.media), classificarContraste(histAtual.desvio_padrao));
+                    }
                 }
             }
         }
 
-        // --- RENDERIZAR JANELA PRINCIPAL ---
-        SDL_SetRenderDrawColor(main_renderer, 0, 0, 0, 255);
-        SDL_RenderClear(main_renderer);
-        SDL_RenderTexture(main_renderer, current_texture, NULL, NULL);
-        SDL_RenderPresent(main_renderer);
+        // --- Renderização da Janela Principal ---
+        SDL_RenderClear(mainRenderer);
+        SDL_RenderTexture(mainRenderer, imageTexture, NULL, NULL);
+        SDL_RenderPresent(mainRenderer);
 
-        // --- RENDERIZAR JANELA SECUNDÁRIA ---
-        SDL_SetRenderDrawColor(sec_renderer, 30, 30, 30, 255); // Fundo cinza escuro
-        SDL_RenderClear(sec_renderer);
+        // --- Renderização da Janela Secundária ---
+        SDL_SetRenderDrawColor(secRenderer, 40, 40, 40, 255); // Fundo escuro
+        SDL_RenderClear(secRenderer);
 
-        // 4. Desenhar Histograma
-        SDL_SetRenderDrawColor(sec_renderer, 255, 255, 255, 255);
-        int max_val = 0;
-        for (int i = 0; i < 256; i++) {
-            if (current_stats->histogram[i] > max_val) max_val = current_stats->histogram[i];
-        }
-
-        float hist_w = 256.0f;
-        float hist_h = 200.0f;
-        float start_x = (sec_w - hist_w) / 2.0f;
-        float start_y = 50.0f + hist_h;
+        // Desenhar Histograma (Gráfico de Barras Simples)
+        SDL_SetRenderDrawColor(secRenderer, 200, 200, 200, 255);
+        int max_bin = 0;
+        for(int i=0; i<256; i++) if(histAtual.bins[i] > max_bin) max_bin = histAtual.bins[i];
 
         for (int i = 0; i < 256; i++) {
-            float h = ((float)current_stats->histogram[i] / max_val) * hist_h;
-            SDL_RenderLine(sec_renderer, start_x + i, start_y, start_x + i, start_y - h);
+            float alturaBarra = (float)histAtual.bins[i] / max_bin * 200.0f;
+            SDL_FRect barra = { 72 + i, 300 - alturaBarra, 1, alturaBarra };
+            SDL_RenderFillRect(secRenderer, &barra);
         }
 
-        // 5. Desenhar Botão (Azul Neutro, Azul Claro Hover, Azul Escuro Clicado)
-        if (btn_state == 0) SDL_SetRenderDrawColor(sec_renderer, 0, 100, 200, 255);      // Neutro
-        else if (btn_state == 1) SDL_SetRenderDrawColor(sec_renderer, 50, 150, 255, 255); // Hover
-        else SDL_SetRenderDrawColor(sec_renderer, 0, 50, 150, 255);                       // Clicado
+        // Desenhar Botão
+        if (btnHover) {
+            if (SDL_GetMouseState(NULL, NULL) & SDL_BUTTON_LMASK) SDL_SetRenderDrawColor(secRenderer, 0, 0, 139, 255);
+            else SDL_SetRenderDrawColor(secRenderer, 100, 149, 237, 255);
+        } else {
+            SDL_SetRenderDrawColor(secRenderer, 0, 0, 255, 255);
+        }
+        SDL_RenderFillRect(secRenderer, &btnRect);
 
-        SDL_RenderFillRect(sec_renderer, &btn_rect);
+        // Renderizar Textos (se a fonte foi carregada)
+        if (font) {
+            SDL_Color textColor = {255, 255, 255, 255};
 
-        SDL_RenderPresent(sec_renderer);
-        SDL_Delay(16); // ~60 FPS
+            // Texto do botão
+            const char* btnText = isEqualized ? "Ver original" : "Equalizar";
+            SDL_Surface* textSurf = TTF_RenderText_Solid(font, btnText, 0, textColor);
+            SDL_Texture* textTex = SDL_CreateTextureFromSurface(secRenderer, textSurf);
+            SDL_FRect tRect = { btnRect.x + btnRect.w/2 - textSurf->w/2, btnRect.y + btnRect.h/2 - textSurf->h/2, textSurf->w, textSurf->h };
+            SDL_RenderTexture(secRenderer, textTex, NULL, &tRect);
+            SDL_DestroySurface(textSurf); SDL_DestroyTexture(textTex);
+
+            // Texto das Estatísticas
+            char statsText[100];
+            snprintf(statsText, sizeof(statsText), "Lum: %s | Cont: %s", classificarLuminosidade(histAtual.media), classificarContraste(histAtual.desvio_padrao));
+            SDL_Surface* statSurf = TTF_RenderText_Solid(font, statsText, 0, textColor);
+            SDL_Texture* statTex = SDL_CreateTextureFromSurface(secRenderer, statSurf);
+            SDL_FRect sRect = { 50, 350, statSurf->w, statSurf->h };
+            SDL_RenderTexture(secRenderer, statTex, NULL, &sRect);
+            SDL_DestroySurface(statSurf); SDL_DestroyTexture(statTex);
+        }
+
+        SDL_RenderPresent(secRenderer);
     }
 
-    // Cleanup
-    SDL_DestroyTexture(tex_gray);
-    SDL_DestroyTexture(tex_eq);
-    SDL_DestroySurface(gray_image);
-    SDL_DestroySurface(eq_image);
-    SDL_DestroyRenderer(main_renderer);
-    SDL_DestroyWindow(main_window);
-    SDL_DestroyRenderer(sec_renderer);
-    SDL_DestroyWindow(sec_window);
-    SDL_Quit();
-
-    return 0;
+    // 7. Limpeza
+    if (font) TTF_CloseFont(font);
+    SDL_DestroyTexture(imageTexture);
+    SDL_DestroyRenderer(mainRenderer);
+    SDL_DestroyRenderer(secRenderer);
+    SDL_DestroyWindow(mainWindow);
+    SDL_DestroyWindow(secWindow);
+    SDL_DestroySurface(surfaceFormatada);
+    SDL_DestroySurface(surfaceBackupCinza);
+    TTF_Quit();
 }
